@@ -1,0 +1,51 @@
+name: ESP32 Build
+
+on:
+  push:
+    paths:
+      - 'esp.zip'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1 — Checkout the repo
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2 — Extract esp.zip
+      - name: Extract esp.zip
+        run: |
+          unzip esp.zip -d project
+          echo "Contents after extract:"
+          ls project/
+
+      # 3 — Setup ESP-IDF v5.1 using official action
+      - name: Setup ESP-IDF v5.1
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.1
+          target: esp32
+          command: |
+            # Find project root (has CMakeLists.txt but not inside main/ or components/)
+            PROJECT_DIR=$(find project -maxdepth 3 -name "CMakeLists.txt" \
+              ! -path "*/main/*" ! -path "*/components/*" | head -1 | xargs dirname)
+
+            echo "Building from: $PROJECT_DIR"
+            cd "$PROJECT_DIR"
+
+            idf.py build
+
+      # 4 — Upload firmware artifacts
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32-firmware-${{ github.sha }}
+          path: |
+            project/**/build/*.bin
+            project/**/build/bootloader/bootloader.bin
+            project/**/build/partition_table/partition-table.bin
+          if-no-files-found: error
+          retention-days: 30
