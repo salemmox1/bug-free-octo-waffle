@@ -1,0 +1,108 @@
+name: ESP32 Build
+
+on:
+  push:
+    paths:
+      - 'esp.zip'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1 — Checkout the repo
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2 — Extract esp.zip
+      - name: Extract esp.zip
+        run: |
+          unzip esp.zip -d project
+          echo "=== Project structure ==="
+          find project -name "CMakeLists.txt" | sort
+
+      # 3 — Fix ALL component CMakeLists.txt for ESP-IDF v5.1
+      #     v5.1 does not auto-propagate esp_event / esp_wifi headers
+      #     Every component that uses them must declare them explicitly
+      - name: Fix component dependencies for v5.1
+        run: |
+          PROJECT_DIR=$(find project -maxdepth 3 -name "CMakeLists.txt" \
+            ! -path "*/main/*" ! -path "*/components/*" | head -1 | xargs dirname)
+          echo "Project: $PROJECT_DIR"
+
+          fix_cmake() {
+            local FILE="$1"
+            shift
+            local DEPS="$*"
+            if [ ! -f "$FILE" ]; then return; fi
+            echo "--- Before: $FILE ---"
+            cat "$FILE"
+            # Add deps to REQUIRES or PRIV_REQUIRES line; if neither exists add REQUIRES
+            for DEP in $DEPS; do
+              if ! grep -q "$DEP" "$FILE"; then
+                if grep -q "PRIV_REQUIRES" "$FILE"; then
+                  sed -i "s/PRIV_REQUIRES/PRIV_REQUIRES $DEP /" "$FILE"
+                elif grep -q "REQUIRES" "$FILE"; then
+                  sed -i "s/REQUIRES/REQUIRES $DEP /" "$FILE"
+                else
+                  # Append before closing paren of idf_component_register
+                  sed -i "s/idf_component_register(/idf_component_register(\n    REQUIRES $DEP/" "$FILE"
+                fi
+              fi
+            done
+            echo "--- After: $FILE ---"
+            cat "$FILE"
+          }
+
+          # wifi_controller — sniffer.h needs esp_event; ap_scanner.h needs esp_wifi
+          for f in $(find "$PROJECT_DIR/components/wifi_controller" -name "CMakeLists.txt"); do
+            fix_cmake "$f" esp_event esp_wifi
+          done
+
+          # frame_analyzer — frame_analyzer.h needs esp_event; parser needs esp_wifi
+          for f in $(find "$PROJECT_DIR/components/frame_analyzer" -name "CMakeLists.txt"); do
+            fix_cmake "$f" esp_event esp_wifi
+          done
+
+          # webserver — needs esp_http_server + esp_event + esp_wifi
+          for f in $(find "$PROJECT_DIR/components/webserver" -name "CMakeLists.txt"); do
+            fix_cmake "$f" esp_http_server esp_event esp_wifi
+          done
+
+          # wsl_bypasser — may need esp_wifi
+          for f in $(find "$PROJECT_DIR/components/wsl_bypasser" -name "CMakeLists.txt" 2>/dev/null); do
+            fix_cmake "$f" esp_wifi esp_event
+          done
+
+          # pcap_serializer / hccapx_serializer
+          for f in $(find "$PROJECT_DIR/components/pcap_serializer" \
+                         "$PROJECT_DIR/components/hccapx_serializer" \
+                         -name "CMakeLists.txt" 2>/dev/null); do
+            fix_cmake "$f" esp_wifi esp_event
+          done
+
+      # 4 — Build
+      - name: Build firmware
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.1
+          target: esp32
+          command: |
+            PROJECT_DIR=$(find project -maxdepth 3 -name "CMakeLists.txt" \
+              ! -path "*/main/*" ! -path "*/components/*" | head -1 | xargs dirname)
+            echo "Building from: $PROJECT_DIR"
+            cd "$PROJECT_DIR"
+            idf.py build
+
+      # 5 — Upload firmware artifacts
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32-firmware-${{ github.sha }}
+          path: |
+            project/**/build/*.bin
+            project/**/build/bootloader/bootloader.bin
+            project/**/build/partition_table/partition-table.bin
+          if-no-files-found: error
+          retention-days: 30
