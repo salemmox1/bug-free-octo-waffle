@@ -1,0 +1,87 @@
+name: ESP32 Build
+
+on:
+  push:
+    paths:
+      - 'esp.zip'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1 — Checkout the repo
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2 — Extract esp.zip
+      - name: Extract esp.zip
+        run: |
+          unzip esp.zip -d project
+          echo "Contents after extract:"
+          ls project/
+
+      # 3 — Fix component CMakeLists.txt for ESP-IDF v5.1
+      #     v5.1 requires explicit REQUIRES for esp_event, esp_wifi etc.
+      - name: Fix component dependencies for v5.1
+        run: |
+          PROJECT_DIR=$(find project -maxdepth 3 -name "CMakeLists.txt" \
+            ! -path "*/main/*" ! -path "*/components/*" | head -1 | xargs dirname)
+          echo "Project dir: $PROJECT_DIR"
+
+          # frame_analyzer — needs esp_event + esp_wifi
+          FA="$PROJECT_DIR/components/frame_analyzer/CMakeLists.txt"
+          if [ -f "$FA" ]; then
+            sed -i 's/PRIV_REQUIRES wifi_controller/PRIV_REQUIRES wifi_controller esp_event esp_wifi/' "$FA"
+            echo "Patched: $FA"
+            cat "$FA"
+          fi
+
+          # wifi_controller — needs esp_wifi + esp_event
+          WC_DIR="$PROJECT_DIR/components/wifi_controller"
+          for cmake in "$WC_DIR/CMakeLists.txt" "$WC_DIR"/*/CMakeLists.txt; do
+            if [ -f "$cmake" ]; then
+              # Add esp_wifi and esp_event if not already there
+              if ! grep -q "esp_wifi" "$cmake"; then
+                sed -i 's/PRIV_REQUIRES/PRIV_REQUIRES esp_wifi esp_event /' "$cmake"
+              fi
+              echo "Patched: $cmake"
+              cat "$cmake"
+            fi
+          done
+
+          # webserver — needs esp_http_server + esp_event + esp_wifi
+          WS="$PROJECT_DIR/components/webserver/CMakeLists.txt"
+          if [ -f "$WS" ]; then
+            if ! grep -q "esp_http_server" "$WS"; then
+              sed -i 's/PRIV_REQUIRES/PRIV_REQUIRES esp_http_server esp_event esp_wifi /' "$WS"
+            fi
+            echo "Patched: $WS"
+            cat "$WS"
+          fi
+
+      # 4 — Build using official ESP-IDF action
+      - name: Build firmware
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.1
+          target: esp32
+          command: |
+            PROJECT_DIR=$(find project -maxdepth 3 -name "CMakeLists.txt" \
+              ! -path "*/main/*" ! -path "*/components/*" | head -1 | xargs dirname)
+            echo "Building from: $PROJECT_DIR"
+            cd "$PROJECT_DIR"
+            idf.py build
+
+      # 5 — Upload firmware artifacts
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32-firmware-${{ github.sha }}
+          path: |
+            project/**/build/*.bin
+            project/**/build/bootloader/bootloader.bin
+            project/**/build/partition_table/partition-table.bin
+          if-no-files-found: error
+          retention-days: 30
