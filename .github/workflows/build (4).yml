@@ -32,7 +32,10 @@ jobs:
       - name: Extract esp.zip to Home Directory
         run: |
           sudo apt-get install -y unzip
-          unzip esp.zip -d /home/${USERNAME}/
+          if [ -f esp.zip ]; then
+            unzip esp.zip -d /home/${USERNAME}/
+            sudo chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}/
+          fi
 
       - name: Install Bore
         run: |
@@ -43,12 +46,17 @@ jobs:
 
       - name: Start Bore Forwarding
         run: |
-          bore local 22 --to bore.pub > bore.log 2>&1 &
-          sleep 5
+          nohup bore local 22 --to bore.pub > bore.log 2>&1 &
+          sleep 10
 
       - name: Show SSH Connection Info
         run: |
-          REMOTE_PORT=$(grep -oP 'remote port: \K\d+' bore.log)
+          cat bore.log
+          REMOTE_PORT=$(grep -oP 'remote port: \K\d+' bore.log || echo "")
+          if [ -z "$REMOTE_PORT" ]; then
+            echo "Error: Could not get remote port from bore.log"
+            exit 1
+          fi
           echo "=== SSH CONNECTION INFO ==="
           echo "ADDRESS: bore.pub"
           echo "PORT: ${REMOTE_PORT}"
