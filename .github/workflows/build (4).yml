@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
 
     steps:
       - name: Checkout repository
@@ -29,25 +29,24 @@ jobs:
           git checkout 5ef1b390026270503634ac3ec9f1ec2e364e23b2
           git submodule update --init --recursive
           
-          # Fix setuptools globally before install
-          python3 -m pip install "setuptools<58.0.0" wheel
+          # Fix: Downgrade critical packages to support legacy IDF check
+          python3 -m pip install "setuptools<58.0.0" "pyparsing<2.4.0" "cryptography<3.4" wheel
           
           ./install.sh esp32
 
       - name: Extract and Locate Project
         run: |
           unzip esp.zip -d project
-          # Find the directory containing the top-level CMakeLists.txt
           PROJECT_DIR=$(find project -maxdepth 3 -name "CMakeLists.txt" ! -path "*/main/*" ! -path "*/components/*" | head -n 1 | xargs dirname)
           echo "PROJECT_PATH=$PROJECT_DIR" >> $GITHUB_ENV
 
       - name: Build Firmware
         run: |
-          # Inject fix directly into the IDF python environment before exporting
+          # Force the internal IDF python environment to also use the downgraded packages
           export IDF_PATH=$HOME/esp-idf
-          $IDF_PYTHON_ENV_PATH/bin/python -m pip install "setuptools<58.0.0" || true
-          
           . $HOME/esp-idf/export.sh
+          python -m pip install "setuptools<58.0.0" "pyparsing<2.4.0"
+          
           cd ${{ env.PROJECT_PATH }}
           idf.py set-target esp32
           idf.py build
