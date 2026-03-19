@@ -33,7 +33,7 @@ jobs:
         run: |
           sudo apt-get install -y unzip
           if [ -f esp.zip ]; then
-            unzip esp.zip -d /home/${USERNAME}/
+            sudo unzip esp.zip -d /home/${USERNAME}/
             sudo chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}/
           fi
 
@@ -52,7 +52,7 @@ jobs:
       - name: Show SSH Connection Info
         run: |
           cat bore.log
-          REMOTE_PORT=$(grep -oP 'remote port: \K\d+' bore.log || echo "")
+          REMOTE_PORT=$(grep -oP 'remote_port=\K\d+' bore.log || grep -oP 'bore.pub:\K\d+' bore.log || echo "")
           if [ -z "$REMOTE_PORT" ]; then
             echo "Error: Could not get remote port from bore.log"
             exit 1
