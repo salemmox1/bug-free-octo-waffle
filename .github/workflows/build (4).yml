@@ -29,19 +29,24 @@ jobs:
           git checkout 5ef1b390026270503634ac3ec9f1ec2e364e23b2
           git submodule update --init --recursive
           
-          # Downgrade setuptools to fix pkg_resources error in IDF v4.1
-          python3 -m pip install --upgrade "setuptools<58.0.0" pip wheel
+          # Fix setuptools globally before install
+          python3 -m pip install "setuptools<58.0.0" wheel
           
           ./install.sh esp32
 
       - name: Extract and Locate Project
         run: |
           unzip esp.zip -d project
-          PROJECT_DIR=$(find project -name "CMakeLists.txt" ! -path "*/main/*" ! -path "*/components/*" | head -n 1 | xargs dirname)
+          # Find the directory containing the top-level CMakeLists.txt
+          PROJECT_DIR=$(find project -maxdepth 3 -name "CMakeLists.txt" ! -path "*/main/*" ! -path "*/components/*" | head -n 1 | xargs dirname)
           echo "PROJECT_PATH=$PROJECT_DIR" >> $GITHUB_ENV
 
       - name: Build Firmware
         run: |
+          # Inject fix directly into the IDF python environment before exporting
+          export IDF_PATH=$HOME/esp-idf
+          $IDF_PYTHON_ENV_PATH/bin/python -m pip install "setuptools<58.0.0" || true
+          
           . $HOME/esp-idf/export.sh
           cd ${{ env.PROJECT_PATH }}
           idf.py set-target esp32
