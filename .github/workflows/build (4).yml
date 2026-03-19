@@ -1,62 +1,64 @@
-name: ESP32 Build
+name: Setup SSH Runner + Bore Forwarding
 
 on:
-  push:
-    paths:
-      - 'esp.zip'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  build:
-    runs-on: ubuntu-20.04
+  setup-ssh-runner:
+    runs-on: ubuntu-latest
+    env:
+      USERNAME: runner
+      PASSWORD: runner
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install system dependencies
+      - name: Ensure runner user has sudo + password
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            git wget flex bison gperf python3 python3-pip python3-setuptools python3-venv \
-            cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0
+          echo "${USERNAME}:${PASSWORD}" | sudo chpasswd
+          echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/${USERNAME}
 
-      - name: Setup ESP-IDF v4.1
+      - name: Install OpenSSH server
         run: |
-          cd $HOME
-          git clone --recursive https://github.com/espressif/esp-idf.git
-          cd esp-idf
-          git checkout 5ef1b390026270503634ac3ec9f1ec2e364e23b2
-          git submodule update --init --recursive
-          
-          # Fix: Downgrade critical packages to support legacy IDF check
-          python3 -m pip install "setuptools<58.0.0" "pyparsing<2.4.0" "cryptography<3.4" wheel
-          
-          ./install.sh esp32
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq openssh-server
+          sudo systemctl enable ssh
+          sudo systemctl start ssh
 
-      - name: Extract and Locate Project
+      - name: Extract esp.zip to Home Directory
         run: |
-          unzip esp.zip -d project
-          PROJECT_DIR=$(find project -maxdepth 3 -name "CMakeLists.txt" ! -path "*/main/*" ! -path "*/components/*" | head -n 1 | xargs dirname)
-          echo "PROJECT_PATH=$PROJECT_DIR" >> $GITHUB_ENV
+          sudo apt-get install -y unzip
+          unzip esp.zip -d /home/${USERNAME}/
 
-      - name: Build Firmware
+      - name: Install Bore
         run: |
-          # Force the internal IDF python environment to also use the downgraded packages
-          export IDF_PATH=$HOME/esp-idf
-          . $HOME/esp-idf/export.sh
-          python -m pip install "setuptools<58.0.0" "pyparsing<2.4.0"
-          
-          cd ${{ env.PROJECT_PATH }}
-          idf.py set-target esp32
-          idf.py build
+          wget https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-unknown-linux-musl.tar.gz
+          tar -xf bore-v0.5.1-x86_64-unknown-linux-musl.tar.gz
+          sudo mv bore /usr/local/bin/
+          rm bore-v0.5.1-x86_64-unknown-linux-musl.tar.gz
 
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: esp32-firmware
-          path: |
-            ${{ env.PROJECT_PATH }}/build/bootloader/bootloader.bin
-            ${{ env.PROJECT_PATH }}/build/partition_table/partition-table.bin
-            ${{ env.PROJECT_PATH }}/build/*.bin
-          if-no-files-found: error
+      - name: Start Bore Forwarding
+        run: |
+          bore local 22 --to bore.pub > bore.log 2>&1 &
+          sleep 5
+
+      - name: Show SSH Connection Info
+        run: |
+          REMOTE_PORT=$(grep -oP 'remote port: \K\d+' bore.log)
+          echo "=== SSH CONNECTION INFO ==="
+          echo "ADDRESS: bore.pub"
+          echo "PORT: ${REMOTE_PORT}"
+          echo "USERNAME: ${USERNAME}"
+          echo "PASSWORD: ${PASSWORD}"
+          echo
+          echo ">>> Connect with:"
+          echo "    ssh ${USERNAME}@bore.pub -p ${REMOTE_PORT}"
+          echo
+          echo ">>> Your files are located in: /home/${USERNAME}/"
+          echo
+          echo ">>> Keeping runner alive..."
+          tail -f /dev/null
