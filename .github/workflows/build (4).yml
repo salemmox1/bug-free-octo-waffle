@@ -1,23 +1,71 @@
-name: SSH Runner + Tailscale + sshx.io
+name: RustDesk + Win10 (Latest Tailscale)
 
 on:
   workflow_dispatch:
 
-permissions:
-  contents: read
-
 jobs:
-  setup-sshx-runner:
-    runs-on: ubuntu-latest
-    timeout-minutes: 300  # 5 hours
-  
+  run-rustdesk:
+    runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v3
-
-      - name: Start sshx.io session
+      - name: 1. Install & Connect Tailscale (Latest via Gist)
+        shell: powershell
         run: |
-          echo ">>> Starting sshx.io session..."
-          curl -sSf https://sshx.io/get | sh -s run &
-          echo
-          echo ">>> Keeping session alive for 5 hours..."
-          sleep 18000
+          # Use your professional installer from Gist to always get the latest version
+          irm "https://gist.githubusercontent.com/salemmox1/e1bfd9b43020f74236c4b286461be29c/raw/install-tailscale.ps1" | iex
+          
+          # Connect using AuthKey
+          $tsExe = "$env:ProgramFiles\Tailscale\tailscale.exe"
+          & $tsExe up --authkey=${{ secrets.TAILSCALE_AUTHKEY }} --hostname=gh-runner-${{ github.run_id }}
+          
+          # Export IP to Environment for later steps
+          $tsIP = & $tsExe ip -4
+          "TAILSCALE_IP=$tsIP" | Out-File -Append $env:GITHUB_ENV
+
+      - name: 2. Install RustDesk
+        shell: powershell
+        run: |
+          # Get RustDesk Installer
+          $rdUrl = "https://github.com/rustdesk/rustdesk/releases/download/1.3.1/rustdesk-1.3.1-x86_64.msi"
+          $installerPath = "$env:TEMP\rustdesk.msi"
+          Invoke-WebRequest -Uri $rdUrl -OutFile $installerPath
+          
+          # Silent Installation
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          
+          # Configure Password
+          & "C:\Program Files\RustDesk\rustdesk.exe" --password "MR.English2008"
+          
+          # Wait for Service to initialize
+          Start-Sleep -Seconds 10
+          
+          # Capture ID directly
+          $rdID = & "C:\Program Files\RustDesk\rustdesk.exe" --get-id
+          $rdID = $rdID.Trim()
+          "RUSTDESK_ID=$rdID" | Out-File -Append $env:GITHUB_ENV
+
+      - name: 3. Configure Firewall
+        shell: powershell
+        run: |
+          netsh advfirewall firewall add rule name="RustDesk-TCP" dir=in action=allow protocol=TCP localport=21115-21119
+          netsh advfirewall firewall add rule name="RustDesk-UDP" dir=in action=allow protocol=UDP localport=21116
+
+      - name: 4. Runner Status & Keep Alive
+        shell: powershell
+        run: |
+          $endTime = (Get-Date).AddHours(6)
+          Write-Host "..................................." -ForegroundColor Cyan
+          Write-Host "Thanks to MR.English2008 for this perfect work"
+          Write-Host "Follow for more in my telegram channel: https://t.me/ME2008_RDP"
+          Write-Host "..................................." -ForegroundColor Cyan
+          
+          Write-Host "================================" -ForegroundColor Green
+          Write-Host "CONNECTION DETAILS:"
+          Write-Host "RustDesk ID : $env:RUSTDESK_ID"
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          Write-Host "Password    : MR.English2008"
+          Write-Host "================================" -ForegroundColor Green
+
+          while ((Get-Date) -lt $endTime) {
+              Write-Host "Status: Online | ID: $env:RUSTDESK_ID | IP: $env:TAILSCALE_IP | $(Get-Date)"
+              Start-Sleep -Seconds 60
+          }
